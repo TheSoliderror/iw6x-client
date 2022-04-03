@@ -161,13 +161,71 @@ void limit_parallel_dll_loading()
 	RegCloseKey(key);
 }
 
+int localfile()
+{
+	FARPROC entry_point;
+	enable_dpi_awareness();
+
+	// This requires admin privilege, but I suppose many
+	// people will start with admin rights if it crashes.
+	limit_parallel_dll_loading();
+
+	srand(uint32_t(time(nullptr)));
+
+	{
+		auto premature_shutdown = true;
+		const auto _ = gsl::finally([&premature_shutdown]()
+			{
+				if (premature_shutdown)
+				{
+					component_loader::pre_destroy();
+				}
+			});
+
+		try
+		{
+			remove_crash_file();
+
+			if (!component_loader::post_start()) return 0;
+
+			auto mode = detect_mode_from_arguments();
+			if (mode == launcher::mode::none)
+			{
+				const launcher launcher;
+				mode = launcher.run();
+				if (mode == launcher::mode::none) return 0;
+			}
+
+			game::environment::set_mode(mode);
+
+			entry_point = load_binary(mode);
+			if (!entry_point)
+			{
+				throw std::runtime_error("Unable to load binary into memory");
+			}
+
+			if (!component_loader::post_load()) return 0;
+
+			premature_shutdown = false;
+		}
+		catch (std::exception& e)
+		{
+			MessageBoxA(nullptr, e.what(), "ERROR", MB_ICONERROR);
+			return 1;
+		}
+	}
+
+	return static_cast<int>(entry_point());
+}
+
+
 void apply_environment()
 {
 	char* buffer{};
 	size_t size{};
 	if (_dupenv_s(&buffer, &size, "XLABS_GHOSTS_INSTALL") != 0 || buffer == nullptr)
 	{
-		throw std::runtime_error("Please use the X Labs launcher to run the game!");
+		throw localfile();
 	}
 
 	const auto _ = gsl::finally([&]
